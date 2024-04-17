@@ -26,8 +26,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +46,10 @@ import (
 	logruswrapper "github.com/topfreegames/pitaya/v2/logger/logrus"
 	"github.com/topfreegames/pitaya/v2/session"
 	"github.com/topfreegames/pitaya/v2/util/compression"
+
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/quic-go/qlog"
 )
 
 // HandshakeSys struct
@@ -411,6 +417,35 @@ func (c *Client) handleHandshake() error {
 // SendRequest sends a request to the server
 func (c *Client) SendRequest(route string, data []byte) (uint, error) {
 	return c.sendMsg(message.Request, route, data)
+}
+
+// TODO: Verify sendMsg later
+func (c *Client) GetQUIC(addr string, tlsConfig *tls.Config) (ID uint, rsp *http.Response, err error){
+	ID = uint(atomic.AddUint32(&c.nextID, 1));
+	roundTripper := &http3.RoundTripper{
+		TLSClientConfig: tlsConfig,
+		QuicConfig: &quic.Config{
+			Tracer: qlog.DefaultTracer,
+		},
+	}
+	defer roundTripper.Close()
+	hclient := &http.Client{
+		Transport: roundTripper,
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	log.Printf("GET %s", addr)
+	go func(addr string) {
+		rsp, err = hclient.Get(addr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("Got response for %s: %#v", addr, rsp)
+		wg.Done()
+	}(addr)
+	wg.Wait()
+	return
 }
 
 // SendNotify sends a notify to the server

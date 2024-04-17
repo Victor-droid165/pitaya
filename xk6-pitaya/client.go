@@ -1,9 +1,13 @@
 package pitaya
 
 import (
+	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"sync"
 	"time"
@@ -105,42 +109,47 @@ func (c *Client) Notify(route string, msg interface{}) error {
 // msg is the message to send
 // returns a promise that will be resolved when the response is received
 // the promise will be rejected if the timeout is reached before a response is received
-func (c *Client) Request(route string, msg interface{}) *goja.Promise { // TODO: add custom timeout
-	m := msg
-	if m == nil {
-		m = map[string]interface{}{}
-	}
+func (c *Client) RequestGetQUIC(route string) *goja.Promise { // TODO: add custom timeout
 	promise, resolve, reject := c.makeHandledPromise()
-	data, err := json.Marshal(m)
-	if err != nil {
-		reject(err)
-		return promise
-	}
 
-	timeNow := time.Now()
-	mid, err := c.client.SendRequest(route, data)
+	var keyLog io.Writer
+
+	pool, err := x509.SystemCertPool()
 	if err != nil {
 		c.pushRequestMetrics(route, time.Since(timeNow), false, false)
 		reject(err)
 		return promise
 	}
-	responseChan := c.getResponseChannelForID(mid)
-	go func() {
-		select {
-		case responseData := <-responseChan:
-			c.pushRequestMetrics(route, time.Since(timeNow), true, false)
-			var ret Response
-			if err := json.Unmarshal(responseData, &ret); err != nil {
-				resolve(responseData)
-				return
-			}
-			resolve(ret)
-			return
-		case <-time.After(c.timeout):
-			c.pushRequestMetrics(route, time.Since(timeNow), false, true)
-			reject(fmt.Errorf("Timeout waiting for response on route %s", route))
+
+	timeNow := time.Now()
+
+	mid, rsp, err := c.client.GetQUIC(route, &tls.Config{
+		RootCAs:            pool,
+		InsecureSkipVerify: true,
+		KeyLogWriter:       keyLog,
+	})
+	if err != nil {
+		c.pushRequestMetrics(route, time.Since(timeNow), false, false)
+		reject(err)
+		return promise
+	}
+	// TODO: responseChan := c.getResponseChannelForID(mid)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func(rsp *Response) {
+		defer wg.Done()
+		defer rsp.Body.Close()
+		body := &bytes.Buffer{}
+		_, err = io.Copy(body, rsp.Body)
+		if err != nil {
+			c.pushRequestMetrics(route, time.Since(timeNow), false, false)
+			reject(err)
+			return promise
 		}
-	}()
+		resolve(body.Bytes())
+	}(rsp)
+	wg.Wait()
 	return promise
 }
 

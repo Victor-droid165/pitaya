@@ -22,6 +22,7 @@ package client
 
 import (
 	"crypto/tls"
+	"net/http"
 
 	"github.com/topfreegames/pitaya/v2/conn/message"
 	"github.com/topfreegames/pitaya/v2/session"
@@ -36,5 +37,6 @@ type PitayaClient interface {
 	MsgChannel() chan *message.Message
 	SendNotify(route string, data []byte) error
 	SendRequest(route string, data []byte) (uint, error)
+	GetQUIC(addr string, tlsConfig *tls.Config) (uint, *http.Response, error)
 	SetClientHandshakeData(data *session.HandshakeData)
 }
