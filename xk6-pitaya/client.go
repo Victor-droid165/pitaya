@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
 	"reflect"
 	"sync"
 	"time"
@@ -47,13 +49,11 @@ func (c *Client) Connect(addr string) error { //TODO: tls Options
 		return errors.New("connecting to a pitaya server in the init context is not supported")
 	}
 
-	err := c.client.ConnectTo(addr)
-	if err != nil {
+	if err := c.client.ConnectTo(addr); err != nil {
 		return err
 	}
 	go c.listen()
-
-	return err
+	return nil
 }
 
 // IsConnected returns true if the client is connected to the server
@@ -113,6 +113,7 @@ func (c *Client) RequestGetQUIC(route string) *goja.Promise { // TODO: add custo
 	promise, resolve, reject := c.makeHandledPromise()
 
 	var keyLog io.Writer
+	timeNow := time.Now()
 
 	pool, err := x509.SystemCertPool()
 	if err != nil {
@@ -121,9 +122,7 @@ func (c *Client) RequestGetQUIC(route string) *goja.Promise { // TODO: add custo
 		return promise
 	}
 
-	timeNow := time.Now()
-
-	mid, rsp, err := c.client.GetQUIC(route, &tls.Config{
+	_, rsp, err := c.client.GetQUIC(route, &tls.Config{
 		RootCAs:            pool,
 		InsecureSkipVerify: true,
 		KeyLogWriter:       keyLog,
@@ -133,11 +132,14 @@ func (c *Client) RequestGetQUIC(route string) *goja.Promise { // TODO: add custo
 		reject(err)
 		return promise
 	}
+
+	log.Printf("Got response for %s: %#v", route, rsp)
 	// TODO: responseChan := c.getResponseChannelForID(mid)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func(rsp *Response) {
+
+	go func(rsp *http.Response) {
 		defer wg.Done()
 		defer rsp.Body.Close()
 		body := &bytes.Buffer{}
@@ -145,7 +147,7 @@ func (c *Client) RequestGetQUIC(route string) *goja.Promise { // TODO: add custo
 		if err != nil {
 			c.pushRequestMetrics(route, time.Since(timeNow), false, false)
 			reject(err)
-			return promise
+			return
 		}
 		resolve(body.Bytes())
 	}(rsp)
