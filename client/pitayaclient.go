@@ -24,6 +24,7 @@ import (
 	"crypto/tls"
 	"net/http"
 
+	"github.com/quic-go/quic-go"
 	"github.com/topfreegames/pitaya/v2/conn/message"
 	"github.com/topfreegames/pitaya/v2/session"
 )
@@ -32,6 +33,7 @@ import (
 type PitayaClient interface {
 	ConnectTo(addr string, tlsConfig ...*tls.Config) error
 	ConnectToWS(addr string, path string, tlsConfig ...*tls.Config) error
+	ConnectToQUIC(addr string, tlsConfig *tls.Config) (quic.Connection, error)
 	ConnectedStatus() bool
 	Disconnect()
 	MsgChannel() chan *message.Message

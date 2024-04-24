@@ -22,6 +22,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -361,6 +362,26 @@ func (c *Client) ConnectTo(addr string, tlsConfig ...*tls.Config) error {
 		return err
 	}
 	c.conn = conn
+	c.IncomingMsgChan = make(chan *message.Message, 10)
+
+	if err = c.handleHandshake(); err != nil {
+		return err
+	}
+
+	c.closeChan = make(chan struct{})
+
+	return nil
+}
+
+func (c *Client) ConnectToQUIC(addr string, tlsConfig *tls.Config) (quic.Connection, error) {
+	var conn net.Conn
+	var err error
+
+	conn, err = quic.DialAddr(context.Background(), addr, tlsConfig, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.conn = &conn{}
 	c.IncomingMsgChan = make(chan *message.Message, 10)
 
 	if err = c.handleHandshake(); err != nil {

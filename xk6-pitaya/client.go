@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/quic-go/quic-go"
 	pitayaclient "github.com/topfreegames/pitaya/v2/client"
 	pitayamessage "github.com/topfreegames/pitaya/v2/conn/message"
 	"github.com/topfreegames/pitaya/v2/session"
@@ -54,6 +55,26 @@ func (c *Client) Connect(addr string) error { //TODO: tls Options
 	}
 	go c.listen()
 	return nil
+}
+
+func (c *Client) ConnectToQUIC(addr string) quic.Connection {
+	vuState := c.vu.State()
+
+	if vuState == nil {
+		return nil
+	}
+
+	var conn quic.Connection
+	var err error
+
+	if conn, err = c.client.ConnectToQUIC(addr, &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"h3", "quic-echo-example"},
+	}); err != nil {
+		return nil
+	}
+
+	return conn
 }
 
 // IsConnected returns true if the client is connected to the server
@@ -127,6 +148,7 @@ func (c *Client) RequestGetQUIC(route string) *goja.Promise { // TODO: add custo
 		InsecureSkipVerify: true,
 		KeyLogWriter:       keyLog,
 	})
+	fmt.Println(rsp)
 	if err != nil {
 		c.pushRequestMetrics(route, time.Since(timeNow), false, false)
 		reject(err)
