@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
-	"github.com/quic-go/quic-go"
 	pitayaclient "github.com/topfreegames/pitaya/v2/client"
 	pitayamessage "github.com/topfreegames/pitaya/v2/conn/message"
 	"github.com/topfreegames/pitaya/v2/session"
@@ -57,24 +56,24 @@ func (c *Client) Connect(addr string) error { //TODO: tls Options
 	return nil
 }
 
-func (c *Client) ConnectToQUIC(addr string) quic.Connection {
+func (c *Client) ConnectToQUIC(addr string) error {
 	vuState := c.vu.State()
 
 	if vuState == nil {
-		return nil
+		return errors.New("connecting to a quic server in the init context is not supported")
 	}
 
-	var conn quic.Connection
-	var err error
-
-	if conn, err = c.client.ConnectToQUIC(addr, &tls.Config{
+	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"h3", "quic-echo-example"},
-	}); err != nil {
-		return nil
 	}
 
-	return conn
+	if err := c.client.ConnectToQUIC(addr, tlsConf); err != nil {
+		return err
+	}
+
+	go c.listen()
+	return nil
 }
 
 // IsConnected returns true if the client is connected to the server
@@ -125,11 +124,46 @@ func (c *Client) Notify(route string, msg interface{}) error {
 	return c.client.SendNotify(route, data)
 }
 
-// Request sends a request to the server
-// route is the route to send the request to
-// msg is the message to send
-// returns a promise that will be resolved when the response is received
-// the promise will be rejected if the timeout is reached before a response is received
+func (c *Client) Request(route string, msg interface{}) *goja.Promise { // TODO: add custom timeout
+	m := msg
+	if m == nil {
+		m = map[string]interface{}{}
+	}
+	promise, resolve, reject := c.makeHandledPromise()
+	data, err := json.Marshal(m)
+	if err != nil {
+		reject(err)
+		return promise
+	}
+
+	timeNow := time.Now()
+	mid, err := c.client.SendRequest(route, data)
+	if err != nil {
+		c.pushRequestMetrics(route, time.Since(timeNow), false, false)
+		reject(err)
+		return promise
+	}
+
+	responseChan := c.getResponseChannelForID(mid)
+	go func() {
+		select {
+		case responseData := <-responseChan:
+			c.pushRequestMetrics(route, time.Since(timeNow), true, false)
+			var ret Response
+			if err := json.Unmarshal(responseData, &ret); err != nil {
+				resolve(responseData)
+				return
+			}
+			resolve(ret)
+			return
+		case <-time.After(c.timeout):
+			c.pushRequestMetrics(route, time.Since(timeNow), false, true)
+			reject(fmt.Errorf("Timeout waiting for response on route %s", route))
+		}
+	}()
+	return promise
+}
+
 func (c *Client) RequestGetQUIC(route string) *goja.Promise { // TODO: add custom timeout
 	promise, resolve, reject := c.makeHandledPromise()
 

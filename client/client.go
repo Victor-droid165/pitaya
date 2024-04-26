@@ -53,6 +53,61 @@ import (
 	"github.com/quic-go/quic-go/qlog"
 )
 
+type QuicConnection struct {
+	quicConn      quic.Connection
+	sendStream    quic.Stream
+	receiveStream quic.Stream
+}
+
+func (c *QuicConnection) Read(b []byte) (int, error) {
+	if c.receiveStream == nil {
+		var err error
+		c.receiveStream, err = c.quicConn.AcceptStream(context.Background())
+		// TODO: check stream id
+		if err != nil {
+			return 0, err
+		}
+		// quic.Stream.Close() closes the stream for writing
+		err = c.receiveStream.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return c.receiveStream.Read(b)
+}
+
+func (c *QuicConnection) Write(b []byte) (int, error) {
+	return c.sendStream.Write(b)
+}
+
+// LocalAddr returns the local network address.
+// needed to fulfill the net.Conn interface
+func (c *QuicConnection) LocalAddr() net.Addr {
+	return c.quicConn.LocalAddr()
+}
+
+// RemoteAddr returns the remote network address.
+func (c *QuicConnection) RemoteAddr() net.Addr {
+	return c.quicConn.RemoteAddr()
+}
+
+func (c *QuicConnection) Close() error {
+	return c.quicConn.CloseWithError(0, "bye")
+}
+
+func (c *QuicConnection) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *QuicConnection) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *QuicConnection) SetWriteDeadline(t time.Time) error {
+	return nil
+}
+
 // HandshakeSys struct
 type HandshakeSys struct {
 	Dict       map[string]uint16 `json:"dict"`
@@ -373,22 +428,50 @@ func (c *Client) ConnectTo(addr string, tlsConfig ...*tls.Config) error {
 	return nil
 }
 
-func (c *Client) ConnectToQUIC(addr string, tlsConfig *tls.Config) (quic.Connection, error) {
-	var conn net.Conn
+func (c *Client) ConnectToQUIC(addr string, tlsConfig *tls.Config) error {
+	var conn quic.Connection
 	var err error
 
 	conn, err = quic.DialAddr(context.Background(), addr, tlsConfig, nil)
 	if err != nil {
-		return nil, err
-	}
-	c.conn = &conn{}
-	c.IncomingMsgChan = make(chan *message.Message, 10)
-
-	if err = c.handleHandshake(); err != nil {
 		return err
 	}
 
+	sendStream, err := conn.OpenStream()
+	if err != nil {
+		return err
+	}
+
+	c.conn = &QuicConnection{
+		quicConn:   conn,
+		sendStream: sendStream,
+	}
+
+	c.IncomingMsgChan = make(chan *message.Message, 10)
 	c.closeChan = make(chan struct{})
+	c.Connected = true
+
+	// Is sendHeartbeates necessary for us? Gotta check it later
+	//go c.sendHeartbeats(handshake.Sys.Heartbeat)
+
+	// Do we have to change something in the goroutines below? Check it.
+	go c.handleServerMessages()
+	go c.handlePackets()
+	go c.pendingRequestsReaper()
+
+	/*
+		Example of sending ang receiving messages from Server
+
+		message := "Hi, server! I'm Victor."
+		c.conn.Write([]byte(message + "\n"))
+
+		buf := make([]byte, len(message))
+		_, err = c.conn.Read(buf)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Message from server: %s", buf)
+	*/
 
 	return nil
 }
@@ -489,6 +572,8 @@ func (c *Client) buildPacket(msg message.Message) ([]byte, error) {
 // sendMsg sends the request to the server
 func (c *Client) sendMsg(msgType message.Type, route string, data []byte) (uint, error) {
 	// TODO mount msg and encode
+	fmt.Println("mmmm")
+	c.conn.Write([]byte("oi"))
 	m := message.Message{
 		Type:  msgType,
 		ID:    uint(atomic.AddUint32(&c.nextID, 1)),
